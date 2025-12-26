@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, Response, render_template_string
 import io
 from PIL import Image
