@@ -5,7 +5,7 @@ from PIL import Image
 app = Flask(__name__)
 
 # Пароль для доступа
-WEB_PASSWORD = "your_password"  # Замени на свой
+WEB_PASSWORD = os.environ.get('SITE_PASSWORD')  # Замени на свой
 
 # Последнее изображение (в памяти)
 latest_image = None
