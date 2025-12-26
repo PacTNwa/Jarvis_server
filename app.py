@@ -14,21 +14,22 @@ latest_image = None
 # HTML страница с автообновлением
 HTML = """
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
-<title>Screen View</title>
-<style>
-body { margin:0; background:#000; display:flex; justify-content:center; align-items:center; height:100vh; }
-img { max-width:100vw; max-height:100vh; object-fit:contain; }
-</style>
+    <meta charset="UTF-8">
+    <title>Экран</title>
+    <style>
+        body { margin:0; background:#000; display:flex; justify-content:center; align-items:center; height:100vh; }
+        img { max-width:100vw; max-height:100vh; object-fit:contain; }
+    </style>
 </head>
 <body>
-<img id="screen" src="/latest.jpg">
-<script>
-setInterval(function() {
-  document.getElementById('screen').src = '/latest.jpg?t=' + new Date().getTime();
-}, 5000);  # Обновление каждые 5 сек
-</script>
+    <img id="screen" src="/latest.jpg">
+    <script>
+        setInterval(() => {
+            document.getElementById('screen').src = '/latest.jpg?t=' + new Date().getTime();
+        }, 5000);  // 5000 мс = 5 сек
+    </script>
 </body>
 </html>
 """
@@ -50,11 +51,16 @@ def upload():
 
 @app.route('/latest.jpg')
 def latest_jpg():
+    auth = request.authorization
+    if not auth or auth.password != SITE_PASSWORD:
+        return 'Неверный пароль', 401
     if latest_image is None:
-        return 'No image', 404
-    if request.authorization and request.authorization.password == WEB_PASSWORD:
-        return Response(latest_image, mimetype='image/jpeg')
-    return 'Unauthorized', 401
+        return 'Нет изображения', 404
+    response = Response(latest_image, mimetype='image/jpeg')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'  # Нет кэшу
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
