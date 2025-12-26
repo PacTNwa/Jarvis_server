@@ -5,7 +5,7 @@ import os
 app = Flask(__name__)
 
 # Замени на свой пароль (или Environment Variable)
-SITE_PASSWORD = "supersecretpassword123"
+SITE_PASSWORD = "JarvisGiminiScreenLook2_5"
 
 latest_image = None
 
