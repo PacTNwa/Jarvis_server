@@ -25,7 +25,7 @@ HTML = """
     <script>
         setInterval(() => {
             document.getElementById('screen').src = '/latest.jpg?t=' + new Date().getTime();
-        }, 5000);
+        }, 1000);
     </script>
 </body>
 </html>
