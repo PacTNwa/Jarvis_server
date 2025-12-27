@@ -1,14 +1,15 @@
+import os  # Для os.environ
 from flask import Flask, request, Response, render_template_string
 import io
-import os
 
 app = Flask(__name__)
 
-# Замени на свой пароль (или Environment Variable)
-SITE_PASSWORD = "JarvisGiminiScreenLook2_5"
+# Пароль для сайта (используй Environment Variable на Render)
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')  # Замени 'defaultpassword' на запасной
 
 latest_image = None
 
+# HTML с автообновлением (каждые 2 сек)
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -24,8 +25,8 @@ HTML = """
     <img id="screen" src="/latest.jpg">
     <script>
         setInterval(() => {
-            document.getElementById('screen').src = '/latest.jpg?t=' + new Date().getTime();
-        }, 1000);
+            document.getElementById('screen').src = '/latest.jpg?t=' + Date.now();
+        }, 2000);  # Обновление каждые 2 сек
     </script>
 </body>
 </html>
@@ -42,11 +43,9 @@ def index():
 def upload():
     global latest_image
     if 'image' not in request.files:
-        print("[SERVER] Нет изображения в запросе")  # ← Лог в консоли Render
         return 'Нет изображения', 400
     file = request.files['image']
     latest_image = file.read()
-    print(f"[SERVER] Изображение загружено, размер {len(latest_image)} байт")  # ← Лог в консоли Render
     return 'OK', 200
 
 @app.route('/latest.jpg')
@@ -55,10 +54,12 @@ def latest_jpg():
     if not auth or auth.password != SITE_PASSWORD:
         return 'Неверный пароль', 401
     if latest_image is None:
-        print("[SERVER] Нет изображения для отображения")  # ← Лог
         return 'Нет изображения', 404
-    print(f"[SERVER] Отправка изображения размером {len(latest_image)} байт")  # ← Лог
-    return Response(latest_image, mimetype='image/jpeg')
+    response = Response(latest_image, mimetype='image/jpeg')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
