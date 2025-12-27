@@ -49,6 +49,7 @@ def upload():
     return 'OK', 200
 
 @app.route('/latest.jpg')
+@app.route('/latest.jpg')
 def latest_jpg():
     auth = request.authorization
     if not auth or auth.password != SITE_PASSWORD:
@@ -56,7 +57,7 @@ def latest_jpg():
     if latest_image is None:
         return 'Нет изображения', 404
     response = Response(latest_image, mimetype='image/jpeg')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'  # ← Добавьте эти 3 строки
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     return response
