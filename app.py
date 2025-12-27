@@ -1,15 +1,13 @@
-import os  # Для os.environ
+import os
 from flask import Flask, request, Response, render_template_string
 import io
 
 app = Flask(__name__)
 
-# Пароль для сайта (используй Environment Variable на Render)
-SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')  # Замени 'defaultpassword' на запасной
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
 
 latest_image = None
 
-# HTML с автообновлением (каждые 2 сек)
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -25,8 +23,8 @@ HTML = """
     <img id="screen" src="/latest.jpg">
     <script>
         setInterval(() => {
-            document.getElementById('screen').src = '/latest.jpg?t=' + Date.now();
-        }, 2000);  # Обновление каждые 2 сек
+            document.getElementById('screen').src = '/latest.jpg?t=' + Math.random();  # Случайный параметр для кэша
+        }, 5000);
     </script>
 </body>
 </html>
@@ -49,7 +47,6 @@ def upload():
     return 'OK', 200
 
 @app.route('/latest.jpg')
-@app.route('/latest.jpg')
 def latest_jpg():
     auth = request.authorization
     if not auth or auth.password != SITE_PASSWORD:
@@ -60,6 +57,7 @@ def latest_jpg():
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
+    response.headers['Last-Modified'] = 'Thu, 01 Jan 1970 00:00:00 GMT'
     return response
 
 if __name__ == '__main__':
