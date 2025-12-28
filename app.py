@@ -1,37 +1,50 @@
 import os
-from flask import Flask, request, Response, render_template_string
+from flask import Flask, request, Response, render_template_string, jsonify
 import io
 from datetime import datetime
 
 app = Flask(__name__)
 
-SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'yourpassword')  # ← меняйте через переменные окружения
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
 
-# Храним последнее изображение + время его загрузки
-latest_image = None
-last_update_time = None
+# Словарь для изображений: {id: image}
+latest_images = {}
 
-# HTML с принудительным обновлением каждые 3 секунды + случайный параметр
+# HTML с JS для списка экранов (каждый img под другим)
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Экран</title>
+    <title>Экраны</title>
     <style>
-        body { margin:0; background:#000; display:flex; justify-content:center; align-items:center; height:100vh; }
-        img { max-width:100vw; max-height:100vh; object-fit:contain; }
+        body { margin:0; background:#000; display:flex; flex-direction:column; align-items:center; padding:20px; }
+        .screen-container { margin-bottom:20px; text-align:center; }
+        .screen-container h3 { color:#fff; margin-bottom:10px; }
+        img { max-width:80vw; max-height:80vh; object-fit:contain; border:1px solid #333; }
     </style>
 </head>
 <body>
-    <img id="screen" src="/latest.jpg">
+    <div id="screens"></div>
     <script>
-        function updateImage() {
-            const img = document.getElementById('screen');
-            img.src = '/latest.jpg?t=' + new Date().getTime() + '&rand=' + Math.random();
+        async function updateScreens() {
+            try {
+                const response = await fetch('/get_ids');
+                const ids = await response.json();
+                const container = document.getElementById('screens');
+                container.innerHTML = '';  // Очистка
+                ids.forEach(id => {
+                    const div = document.createElement('div');
+                    div.className = 'screen-container';
+                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/latest.jpg?id=${id}&t=${Date.now()}">`;
+                    container.appendChild(div);
+                });
+            } catch (e) {
+                console.error(e);
+            }
         }
-        setInterval(updateImage, 3000);  // 3 секунды — оптимально
-        updateImage();  // Первое обновление сразу
+        setInterval(updateScreens, 3000);  // Обновление каждые 3 сек
+        updateScreens();  // Первое обновление
     </script>
 </body>
 </html>
@@ -46,21 +59,13 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    global latest_image, last_update_time
-    if 'image' not in request.files:
-        return 'Нет изображения', 400
-    
+    id = request.form.get('id')
+    if not id or 'image' not in request.files:
+        return 'Нет ID или изображения', 400
     file = request.files['image']
     new_image = file.read()
-    
-    # Заменяем только если новое изображение больше 1 КБ (защита от пустых кадров)
-    if len(new_image) > 1024:
-        latest_image = new_image
-        last_update_time = datetime.utcnow()
-        print(f"[UPLOAD] Новое изображение загружено, размер: {len(new_image)} байт")
-    else:
-        print("[UPLOAD] Получен пустой кадр — игнорируем")
-    
+    if len(new_image) > 1024:  # Защита от пустых
+        latest_images[id] = new_image
     return 'OK', 200
 
 @app.route('/latest.jpg')
@@ -68,19 +73,18 @@ def latest_jpg():
     auth = request.authorization
     if not auth or auth.password != SITE_PASSWORD:
         return 'Неверный пароль', 401
-    
-    if latest_image is None:
-        return 'Нет изображения', 404
-    
-    response = Response(latest_image, mimetype='image/jpeg')
-    # Максимальная защита от кэша
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
+    id = request.args.get('id')
+    if id not in latest_images:
+        return 'Нет изображения для этого ID', 404
+    response = Response(latest_images[id], mimetype='image/jpeg')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers['Last-Modified'] = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-    response.headers['ETag'] = str(hash(last_update_time or 0))  # Меняем ETag при каждом обновлении
-    
     return response
+
+@app.route('/get_ids')
+def get_ids():
+    return jsonify(list(latest_images.keys()))  # Список всех ID
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
