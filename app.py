@@ -1,13 +1,17 @@
 import os
 from flask import Flask, request, Response, render_template_string
 import io
+from datetime import datetime
 
 app = Flask(__name__)
 
-SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'yourpassword')  # ← меняйте через переменные окружения
 
+# Храним последнее изображение + время его загрузки
 latest_image = None
+last_update_time = None
 
+# HTML с принудительным обновлением каждые 3 секунды + случайный параметр
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -22,9 +26,12 @@ HTML = """
 <body>
     <img id="screen" src="/latest.jpg">
     <script>
-        setInterval(() => {
-            document.getElementById('screen').src = '/latest.jpg?t=' + Math.random();  # Случайный параметр для кэша
-        }, 5000);
+        function updateImage() {
+            const img = document.getElementById('screen');
+            img.src = '/latest.jpg?t=' + new Date().getTime() + '&rand=' + Math.random();
+        }
+        setInterval(updateImage, 3000);  // 3 секунды — оптимально
+        updateImage();  // Первое обновление сразу
     </script>
 </body>
 </html>
@@ -39,11 +46,21 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    global latest_image
+    global latest_image, last_update_time
     if 'image' not in request.files:
         return 'Нет изображения', 400
+    
     file = request.files['image']
-    latest_image = file.read()
+    new_image = file.read()
+    
+    # Заменяем только если новое изображение больше 1 КБ (защита от пустых кадров)
+    if len(new_image) > 1024:
+        latest_image = new_image
+        last_update_time = datetime.utcnow()
+        print(f"[UPLOAD] Новое изображение загружено, размер: {len(new_image)} байт")
+    else:
+        print("[UPLOAD] Получен пустой кадр — игнорируем")
+    
     return 'OK', 200
 
 @app.route('/latest.jpg')
@@ -51,13 +68,18 @@ def latest_jpg():
     auth = request.authorization
     if not auth or auth.password != SITE_PASSWORD:
         return 'Неверный пароль', 401
+    
     if latest_image is None:
         return 'Нет изображения', 404
+    
     response = Response(latest_image, mimetype='image/jpeg')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    # Максимальная защита от кэша
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
-    response.headers['Last-Modified'] = 'Thu, 01 Jan 1970 00:00:00 GMT'
+    response.headers['Last-Modified'] = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
+    response.headers['ETag'] = str(hash(last_update_time or 0))  # Меняем ETag при каждом обновлении
+    
     return response
 
 if __name__ == '__main__':
