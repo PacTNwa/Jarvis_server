@@ -1,16 +1,13 @@
 import os
-from flask import Flask, request, Response, render_template_string
-import io
-from datetime import datetime
+from flask import Flask, request, Response, render_template_string, jsonify
+import time
 
 app = Flask(__name__)
 
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
 
-# Словарь для изображений по ID
-latest_images = {}
+latest_images = {}  # {id: bytes}
 
-# HTML для просмотра MJPEG (30 FPS)
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -19,43 +16,43 @@ HTML = """
     <title>Экраны</title>
     <style>
         body { margin:0; background:#000; display:flex; flex-direction:column; align-items:center; padding:20px; }
-        .screen-container { margin-bottom:20px; text-align:center; }
-        .screen-container h3 { color:#fff; margin-bottom:10px; }
-        img { max-width:80vw; max-height:80vh; object-fit:contain; border:1px solid #333; }
+        .screen { margin-bottom:30px; text-align:center; }
+        h3 { color:#fff; margin-bottom:10px; }
+        img { max-width:90vw; max-height:80vh; object-fit:contain; border:1px solid #333; }
     </style>
 </head>
 <body>
     <div id="screens"></div>
     <script>
-        async function updateScreens() {
+        async function loadScreens() {
             try {
-                const response = await fetch('/get_ids');
-                const ids = await response.json();
+                const res = await fetch('/get_ids');
+                const ids = await res.json();
                 const container = document.getElementById('screens');
                 container.innerHTML = '';
                 ids.forEach(id => {
                     const div = document.createElement('div');
-                    div.className = 'screen-container';
-                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/stream?id=${id}" style="width:100%;">`;  # MJPEG-стрим
+                    div.className = 'screen';
+                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/stream?id=${id}" style="width:100%;">`;
                     container.appendChild(div);
                 });
             } catch (e) {
                 console.error(e);
             }
         }
-        setInterval(updateScreens, 5000);  # Обновление списка ID
-        updateScreens();
+        setInterval(loadScreens, 5000);
+        loadScreens();
     </script>
 </body>
 </html>
 """
 
-@app.route('/', methods=['GET'])
+@app.route('/')
 def index():
     auth = request.authorization
     if not auth or auth.password != SITE_PASSWORD:
         return 'Неверный пароль', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
-    return render_template_string(HTML)
+    return HTML
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -64,6 +61,7 @@ def upload():
         return 'Нет ID или изображения', 400
     file = request.files['image']
     latest_images[id] = file.read()
+    print(f"Получен кадр для {id}, размер {len(latest_images[id])} байт")
     return 'OK', 200
 
 @app.route('/stream')
@@ -73,11 +71,13 @@ def stream():
         return 'Нет изображения', 404
 
     def generate():
+        last_frame = None
         while True:
-            with latest_images.lock:  # Если нужно мьютекс для многопоточности
-                frame = latest_images[id]
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            frame = latest_images.get(id)
+            if frame and frame != last_frame:  # Отдаём только новые кадры
+                last_frame = frame
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
             time.sleep(0.033)  # ~30 FPS
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
