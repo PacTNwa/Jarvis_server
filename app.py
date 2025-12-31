@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, Response, render_template_string, jsonify
+from flask import Flask, request, Response, render_template_string
 import io
 from datetime import datetime
 
@@ -7,10 +7,10 @@ app = Flask(__name__)
 
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
 
-# Словарь для изображений: {id: image}
+# Словарь для изображений по ID
 latest_images = {}
 
-# HTML с JS для списка экранов (каждый img под другим)
+# HTML для просмотра MJPEG (30 FPS)
 HTML = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -32,19 +32,19 @@ HTML = """
                 const response = await fetch('/get_ids');
                 const ids = await response.json();
                 const container = document.getElementById('screens');
-                container.innerHTML = '';  // Очистка
+                container.innerHTML = '';
                 ids.forEach(id => {
                     const div = document.createElement('div');
                     div.className = 'screen-container';
-                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/latest.jpg?id=${id}&t=${Date.now()}">`;
+                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/stream?id=${id}" style="width:100%;">`;  # MJPEG-стрим
                     container.appendChild(div);
                 });
             } catch (e) {
                 console.error(e);
             }
         }
-        setInterval(updateScreens, 3000);  // Обновление каждые 3 сек
-        updateScreens();  // Первое обновление
+        setInterval(updateScreens, 5000);  # Обновление списка ID
+        updateScreens();
     </script>
 </body>
 </html>
@@ -63,28 +63,28 @@ def upload():
     if not id or 'image' not in request.files:
         return 'Нет ID или изображения', 400
     file = request.files['image']
-    new_image = file.read()
-    if len(new_image) > 1024:  # Защита от пустых
-        latest_images[id] = new_image
+    latest_images[id] = file.read()
     return 'OK', 200
 
-@app.route('/latest.jpg')
-def latest_jpg():
-    auth = request.authorization
-    if not auth or auth.password != SITE_PASSWORD:
-        return 'Неверный пароль', 401
+@app.route('/stream')
+def stream():
     id = request.args.get('id')
     if id not in latest_images:
-        return 'Нет изображения для этого ID', 404
-    response = Response(latest_images[id], mimetype='image/jpeg')
-    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+        return 'Нет изображения', 404
+
+    def generate():
+        while True:
+            with latest_images.lock:  # Если нужно мьютекс для многопоточности
+                frame = latest_images[id]
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            time.sleep(0.033)  # ~30 FPS
+
+    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/get_ids')
 def get_ids():
-    return jsonify(list(latest_images.keys()))  # Список всех ID
+    return jsonify(list(latest_images.keys()))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
