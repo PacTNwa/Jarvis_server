@@ -1,47 +1,90 @@
+from flask import Flask, render_template_string, request, redirect, url_for
+import cv2
 import os
-from flask import Flask, request, Response, render_template_string, jsonify
-import time
+import base64
+import datetime
 
 app = Flask(__name__)
 
-SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'JarvisGiminiScreenLook2_5')
+# Папка для сохранения фото
+UPLOAD_FOLDER = 'static/photos'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-latest_images = {}  # {id: bytes}
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-HTML = """
+# HTML-шаблон с веб-камерой и кнопкой
+INDEX_HTML = """
 <!DOCTYPE html>
-<html lang="ru">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Экраны</title>
+    <title>Веб-камера → Фото на сервер</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { margin:0; background:#000; display:flex; flex-direction:column; align-items:center; padding:20px; }
-        .screen { margin-bottom:30px; text-align:center; }
-        h3 { color:#fff; margin-bottom:10px; }
-        img { max-width:90vw; max-height:80vh; object-fit:contain; border:1px solid #333; }
+        body { font-family: Arial, sans-serif; text-align: center; background: #111; color: #eee; }
+        video, img { max-width: 100%; border: 3px solid #444; border-radius: 8px; margin: 10px; }
+        button { padding: 12px 24px; font-size: 18px; margin: 10px; cursor: pointer; }
+        #photos { display: flex; flex-wrap: wrap; justify-content: center; }
+        .photo { margin: 10px; }
     </style>
 </head>
 <body>
-    <div id="screens"></div>
+    <h1>Сделай фото с веб-камеры</h1>
+    
+    <video id="video" autoplay playsinline></video>
+    <br>
+    <button onclick="snap()">Сфоткать</button>
+    
+    <canvas id="canvas" style="display:none;"></canvas>
+    
+    <h2>Последние фото</h2>
+    <div id="photos">
+        {% for photo in photos %}
+        <div class="photo">
+            <img src="{{ url_for('static', filename='photos/' + photo) }}" width="320">
+            <p>{{ photo }}</p>
+        </div>
+        {% endfor %}
+    </div>
+
     <script>
-        async function loadScreens() {
-            try {
-                const res = await fetch('/get_ids');
-                const ids = await res.json();
-                const container = document.getElementById('screens');
-                container.innerHTML = '';
-                ids.forEach(id => {
-                    const div = document.createElement('div');
-                    div.className = 'screen';
-                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/stream?id=${id}" style="width:100%;">`;
-                    container.appendChild(div);
-                });
-            } catch (e) {
-                console.error(e);
-            }
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d');
+
+        // Запуск камеры
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(stream => {
+                video.srcObject = stream;
+            })
+            .catch(err => {
+                alert("Не удалось открыть камеру: " + err);
+            });
+
+        function snap() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Получаем изображение в base64
+            const dataUrl = canvas.toDataURL('image/jpeg');
+            
+            // Отправляем на сервер
+            fetch('/upload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: dataUrl })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();  // перезагрузка для показа нового фото
+                } else {
+                    alert("Ошибка загрузки");
+                }
+            })
+            .catch(err => alert("Ошибка: " + err));
         }
-        setInterval(loadScreens, 5000);
-        loadScreens();
     </script>
 </body>
 </html>
@@ -49,41 +92,30 @@ HTML = """
 
 @app.route('/')
 def index():
-    auth = request.authorization
-    if not auth or auth.password != SITE_PASSWORD:
-        return 'Неверный пароль', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
-    return HTML
+    # Список всех сохранённых фото
+    photos = sorted([f for f in os.listdir(app.config['UPLOAD_FOLDER']) if f.endswith(('.jpg', '.jpeg'))], reverse=True)
+    return render_template_string(INDEX_HTML, photos=photos)
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    id = request.form.get('id')
-    if not id or 'image' not in request.files:
-        return 'Нет ID или изображения', 400
-    file = request.files['image']
-    latest_images[id] = file.read()
-    return 'OK', 200
-
-@app.route('/stream')
-def stream():
-    id = request.args.get('id')
-    if id not in latest_images:
-        return 'Нет изображения', 404
-
-    def generate():
-        last_frame = None
-        while True:
-            frame = latest_images.get(id)
-            if frame and frame != last_frame:
-                last_frame = frame
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            time.sleep(0.033)  # 30 FPS
-
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-@app.route('/get_ids')
-def get_ids():
-    return jsonify(list(latest_images.keys()))
+    try:
+        data = request.get_json()
+        image_data = data['image'].split(',')[1]  # убираем "data:image/jpeg;base64,"
+        img_bytes = base64.b64decode(image_data)
+        
+        # Сохраняем с красивым именем
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"photo_{timestamp}.jpg"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        with open(filepath, 'wb') as f:
+            f.write(img_bytes)
+        
+        return {"success": True, "filename": filename}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    print("Запускаю сервер... Открой в браузере: http://127.0.0.1:5000")
+    print("Если с телефона — http://твой_IP_компьютера:5000")
+    app.run(host='0.0.0.0', port=5000, debug=True)
