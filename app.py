@@ -61,7 +61,6 @@ def upload():
         return 'Нет ID или изображения', 400
     file = request.files['image']
     latest_images[id] = file.read()
-    print(f"Получен кадр для {id}, размер {len(latest_images[id])} байт")
     return 'OK', 200
 
 @app.route('/stream')
@@ -74,11 +73,11 @@ def stream():
         last_frame = None
         while True:
             frame = latest_images.get(id)
-            if frame and frame != last_frame:  # Отдаём только новые кадры
+            if frame and frame != last_frame:
                 last_frame = frame
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-            time.sleep(0.033)  # ~30 FPS
+            time.sleep(0.033)  # 30 FPS
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
