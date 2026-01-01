@@ -1,110 +1,90 @@
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
 import os
-import base64
+from flask import Flask, request, Response, render_template_string, jsonify
+import io
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Папка для фото (Render.com сохраняет в /tmp или используй persistent storage если нужно)
-PHOTOS_DIR = 'static/photos'
-if not os.path.exists(PHOTOS_DIR):
-    os.makedirs(PHOTOS_DIR)
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', 'defaultpassword')
 
-# HTML + JS — всё в одной строке
-INDEX_HTML = """
+# Словарь для изображений: {id: image}
+latest_images = {}
+
+# HTML с JS для списка экранов (каждый img под другим)
+HTML = """
 <!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Просто камера</title>
+    <title>Экраны</title>
     <style>
-        body { margin:0; padding:20px; background:#000; color:#0f0; font-family:monospace; text-align:center; }
-        video { max-width:100%; border:2px solid #0f0; border-radius:8px; margin:20px 0; }
-        button { padding:15px 40px; font-size:22px; background:#0f0; color:#000; border:none; border-radius:8px; cursor:pointer; margin:20px; }
-        #photos { display:flex; flex-wrap:wrap; justify-content:center; }
-        .photo { margin:15px; background:#111; padding:10px; border-radius:8px; }
-        .photo img { max-width:320px; border:1px solid #0f0; border-radius:6px; }
-        h1 { color:#0f0; text-shadow:0 0 10px #0f0; }
+        body { margin:0; background:#000; display:flex; flex-direction:column; align-items:center; padding:20px; }
+        .screen-container { margin-bottom:20px; text-align:center; }
+        .screen-container h3 { color:#fff; margin-bottom:10px; }
+        img { max-width:80vw; max-height:80vh; object-fit:contain; border:1px solid #333; }
     </style>
 </head>
 <body>
-    <h1>Камера → Фото</h1>
-    
-    <video id="video" autoplay playsinline></video>
-    <br>
-    <button onclick="snap()">Сфоткать</button>
-    
-    <canvas id="canvas" style="display:none;"></canvas>
-    
-    <h2>Сохранённые фото</h2>
-    <div id="photos">
-        {% for photo in photos %}
-        <div class="photo">
-            <img src="/photos/{{ photo }}">
-            <p>{{ photo }}</p>
-        </div>
-        {% endfor %}
-    </div>
-
+    <div id="screens"></div>
     <script>
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } })
-            .then(stream => video.srcObject = stream)
-            .catch(err => alert("Камера не открылась: " + err));
-
-        function snap() {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            const dataUrl = canvas.toDataURL('image/jpeg');
-            
-            fetch('/snap', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({data: dataUrl})
-            })
-            .then(r => r.json())
-            .then(res => {
-                if (res.ok) location.reload();
-                else alert("Ошибка: " + res.error);
-            })
-            .catch(err => alert("Сеть: " + err));
+        async function updateScreens() {
+            try {
+                const response = await fetch('/get_ids');
+                const ids = await response.json();
+                const container = document.getElementById('screens');
+                container.innerHTML = '';  // Очистка
+                ids.forEach(id => {
+                    const div = document.createElement('div');
+                    div.className = 'screen-container';
+                    div.innerHTML = `<h3>Экран ${id}</h3><img src="/latest.jpg?id=${id}&t=${Date.now()}">`;
+                    container.appendChild(div);
+                });
+            } catch (e) {
+                console.error(e);
+            }
         }
+        setInterval(updateScreens, 3000);  // Обновление каждые 3 сек
+        updateScreens();  // Первое обновление
     </script>
 </body>
 </html>
 """
 
-@app.route('/')
+@app.route('/', methods=['GET'])
 def index():
-    photos = sorted(os.listdir(PHOTOS_DIR), reverse=True)
-    return render_template_string(INDEX_HTML, photos=photos)
+    auth = request.authorization
+    if not auth or auth.password != SITE_PASSWORD:
+        return 'Неверный пароль', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
+    return render_template_string(HTML)
 
-@app.route('/snap', methods=['POST'])
-def snap():
-    try:
-        data = request.json['data']
-        img_data = base64.b64decode(data.split(',')[1])
+@app.route('/upload', methods=['POST'])
+def upload():
+    id = request.form.get('id')
+    if not id or 'image' not in request.files:
+        return 'Нет ID или изображения', 400
+    file = request.files['image']
+    new_image = file.read()
+    if len(new_image) > 1024:  # Защита от пустых
+        latest_images[id] = new_image
+    return 'OK', 200
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"photo_{ts}.jpg"
-        path = os.path.join(PHOTOS_DIR, filename)
+@app.route('/latest.jpg')
+def latest_jpg():
+    auth = request.authorization
+    if not auth or auth.password != SITE_PASSWORD:
+        return 'Неверный пароль', 401
+    id = request.args.get('id')
+    if id not in latest_images:
+        return 'Нет изображения для этого ID', 404
+    response = Response(latest_images[id], mimetype='image/jpeg')
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
-        with open(path, 'wb') as f:
-            f.write(img_data)
-
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-@app.route('/photos/<path:filename>')
-def serve_photo(filename):
-    return send_from_directory(PHOTOS_DIR, filename)
+@app.route('/get_ids')
+def get_ids():
+    return jsonify(list(latest_images.keys()))  # Список всех ID
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(host='0.0.0.0', port=5000)
